@@ -49,8 +49,21 @@ project/
 
 ## Instalación
 
-1. Descarga e instala la extensión desde el [Marketplace de VSCode](https://marketplace.visualstudio.com/).
-2. Reinicia VSCode si es necesario.
+La aplicacion la compilo en formato vsix
+
+para eso hay que instalar vsce para empaquetar la extension
+
+```bash
+npm install -g @vscode/vsce
+```
+
+
+Una vez que vsce está instalado y tu proyecto está listo, simplemente navega a la carpeta raíz de tu extensión en la terminal y ejecuta:
+
+```bash
+vsce package
+```
+
 
 ## Contribuciones
 
