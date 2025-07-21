@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// NUEVO: Definimos un Set con las extensiones de archivo que consideramos binarias.
-// Usamos un Set para una búsqueda más rápida y eficiente.
+// REFACTOR: Conjunto de directorios a ignorar, para reutilizarlo en ambas funciones.
+const EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.vscode', 'out']);
+
+// Conjunto de extensiones de archivo que consideramos binarias.
 const BINARY_EXTENSIONS = new Set([
     // Imágenes
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp', '.tiff',
@@ -22,8 +24,8 @@ const BINARY_EXTENSIONS = new Set([
 ]);
 
 /**
- * Recorre un directorio de forma recursiva y devuelve una lista de URIs de todos los archivos encontrados.
- * (Esta función no cambia)
+ * Recorre un directorio de forma recursiva para la función 'Copiar Contenido'.
+ * (Modificado para usar el conjunto EXCLUDED_DIRS)
  */
 async function getAllFileUrisInDirectory(directoryUri: vscode.Uri): Promise<vscode.Uri[]> {
     let fileUris: vscode.Uri[] = [];
@@ -33,7 +35,7 @@ async function getAllFileUrisInDirectory(directoryUri: vscode.Uri): Promise<vsco
             const fullPath = path.join(directoryUri.fsPath, entry.name);
             const entryUri = vscode.Uri.file(fullPath);
             if (entry.isDirectory()) {
-                if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.vscode' || entry.name === 'out') {
+                if (EXCLUDED_DIRS.has(entry.name)) { // REFACTOR: Usa el conjunto compartido
                     continue;
                 }
                 const subDirFiles = await getAllFileUrisInDirectory(entryUri);
@@ -49,8 +51,48 @@ async function getAllFileUrisInDirectory(directoryUri: vscode.Uri): Promise<vsco
     return fileUris;
 }
 
+
+// --- NUEVA FUNCIÓN ---
+/**
+ * Genera una representación de árbol de un directorio de forma recursiva.
+ * @param directoryPath La ruta al directorio.
+ * @param prefix El prefijo para la indentación y las líneas del árbol.
+ * @returns Una cadena con la estructura del árbol.
+ */
+async function generateDirectoryTree(directoryPath: string, prefix: string = ''): Promise<string> {
+    let treeString = '';
+    try {
+        // Lee y filtra los directorios excluidos
+        const entries = (await fs.promises.readdir(directoryPath, { withFileTypes: true }))
+            .filter(entry => !EXCLUDED_DIRS.has(entry.name));
+
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            const isLast = i === entries.length - 1;
+            const connector = isLast ? '└── ' : '├── ';
+            const childPrefix = prefix + (isLast ? '    ' : '│   ');
+
+            treeString += `${prefix}${connector}${entry.name}\n`;
+
+            if (entry.isDirectory()) {
+                const subTree = await generateDirectoryTree(path.join(directoryPath, entry.name), childPrefix);
+                treeString += subTree;
+            }
+        }
+    } catch (error) {
+        console.error(`Error al generar el árbol para ${directoryPath}:`, error);
+        // Devuelve el error como parte del árbol para que el usuario sepa que algo falló
+        treeString += `${prefix}[ERROR AL LEER DIRECTORIO]\n`;
+    }
+
+    return treeString;
+}
+
+
 export function activate(context: vscode.ExtensionContext) {
-    const disposable = vscode.commands.registerCommand('extension.copyPathAndContent', async (uri: vscode.Uri) => {
+
+    // Comando original: Copiar Ruta y Contenido
+    const copyPathContentDisposable = vscode.commands.registerCommand('extension.copyPathAndContent', async (uri: vscode.Uri) => {
         if (!uri) {
             vscode.window.showErrorMessage('No se ha seleccionado ningún archivo o directorio.');
             return;
@@ -69,13 +111,10 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (stats.isFile()) {
                 const relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
-                
-                // CAMBIO: Usamos la lista negra para decidir.
                 const fileExtension = path.extname(uri.fsPath).toLowerCase();
                 if (BINARY_EXTENSIONS.has(fileExtension)) {
                     finalText = `${relativePath}\n\`\`\`\n[Contenido de archivo binario omitido]\n\`\`\``;
                 } else {
-                    // Si no está en la lista negra, lo leemos como texto.
                     const content = fs.readFileSync(uri.fsPath, 'utf8');
                     finalText = `${relativePath}\n\`\`\`\n${content}\n\`\`\``;
                 }
@@ -83,16 +122,13 @@ export function activate(context: vscode.ExtensionContext) {
             } else if (stats.isDirectory()) {
                 const allFiles = await getAllFileUrisInDirectory(uri);
                 const combinedContent: string[] = [];
-
                 if (allFiles.length === 0) {
                     vscode.window.showInformationMessage('El directorio seleccionado no contiene archivos.');
                     return;
                 }
-
                 for (const fileUri of allFiles) {
                     const relativePath = path.relative(workspaceFolder.uri.fsPath, fileUri.fsPath);
                     try {
-                        // CAMBIO: Misma lógica de lista negra dentro del bucle.
                         const fileExtension = path.extname(fileUri.fsPath).toLowerCase();
                         if (BINARY_EXTENSIONS.has(fileExtension)) {
                             combinedContent.push(`${relativePath}\n\`\`\`\n[Contenido de archivo binario omitido]\n\`\`\``);
@@ -120,7 +156,40 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(disposable);
+    // --- NUEVO COMANDO: Copiar Árbol de Directorio ---
+    const copyTreeDisposable = vscode.commands.registerCommand('extension.copyDirectoryTree', async (uri: vscode.Uri) => {
+        if (!uri) {
+            vscode.window.showErrorMessage('No se ha seleccionado ningún directorio.');
+            return;
+        }
+
+        try {
+            const stats = fs.statSync(uri.fsPath);
+            if (!stats.isDirectory()) {
+                vscode.window.showInformationMessage('Esta acción solo se puede usar en un directorio.');
+                return;
+            }
+
+            // Genera la estructura del árbol a partir de la ruta seleccionada.
+            const treeStructure = await generateDirectoryTree(uri.fsPath);
+
+            // Obtiene el nombre del directorio raíz y lo añade al principio.
+            const rootDirName = path.basename(uri.fsPath);
+            const finalText = `${rootDirName}/\n${treeStructure}`;
+
+            // Copia al portapapeles y muestra notificación.
+            await vscode.env.clipboard.writeText(finalText);
+            vscode.window.showInformationMessage('Árbol de directorio copiado al portapapeles.');
+
+        } catch (error) {
+            vscode.window.showErrorMessage(`Error al generar el árbol del directorio: ${error instanceof Error ? error.message : String(error)}`);
+            console.error(error);
+        }
+    });
+
+
+    // Añade ambos comandos a las suscripciones para que se activen y desactiven correctamente.
+    context.subscriptions.push(copyPathContentDisposable, copyTreeDisposable);
 }
 
 export function deactivate() {}

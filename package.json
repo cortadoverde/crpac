@@ -2,7 +2,7 @@
   "name": "copyrelativepathandcontent",
   "displayName": "copyRelativePathAndContent",
   "description": "",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -16,6 +16,10 @@
       {
         "command": "extension.copyPathAndContent",
         "title": "Copiar ruta relativa y contenido"
+      },
+      {
+        "command": "extension.copyDirectoryTree",
+        "title": "Copiar Árbol de Directorio"
       }
     ],
     "menus": {
@@ -24,6 +28,11 @@
           "command": "extension.copyPathAndContent",
           "when": "resourceLangId != ''",
           "group": "navigation@5"
+        },
+        {
+          "command": "extension.copyDirectoryTree",
+          "when": "explorerResourceIsFolder", 
+          "group": "navigation@6"
         }
       ]
     }
@@ -35,6 +44,10 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cortadoverde/crpac.git"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
