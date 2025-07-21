@@ -14,10 +14,36 @@ Esta extensión para Visual Studio Code agrega opciones al menú contextual que 
 ## Uso
 
 1. Haz clic derecho sobre un archivo en el explorador de VSCode.
-2. Selecciona la opción deseada:
-    - "Copiar ruta relativa"
-    - "Copiar contenido del archivo"
-3. La información seleccionada se copiará automáticamente al portapapeles.
+
+![Menú Contextual](/assets/menu_contextual.png)
+
+
+Si el le path seleccionado es un directorio copia recursivamente todos los 
+sub-directorios que haya.
+
+concatenando los archivos  con un separador ---
+
+project/
+└── ejemplo/
+    ├── archivo1.txt
+    └── archivo2.js
+
+devolveria
+
+```markdown
+
+project\ejemplo\archivo1.txt
+```
+Archivo txt
+```
+
+---
+
+project\ejemplo\archivo2.js
+```
+// archivo js
+```
+```
 
 ## Instalación
 
