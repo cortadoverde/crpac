@@ -1,8 +1,8 @@
 {
   "name": "copyrelativepathandcontent",
-  "displayName": "copyRelativePathAndContent",
-  "description": "",
-  "version": "0.0.9",
+  "displayName": "Copy Path & Content (with AI)",
+  "description": "Copia la ruta relativa y el contenido de archivos/directorios. Opcionalmente, analiza el contenido con IA.",
+  "version": "0.1.2",
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -12,10 +12,21 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Copy Path & Content (with AI)",
+      "properties": {
+        "copyRelativePathAndContent.googleAiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Tu API Key de Google AI (Gemini) para usar las funciones de análisis de IA.",
+          "scope": "application"
+        }
+      }
+    },
     "commands": [
       {
-        "command": "extension.copyPathAndContent",
-        "title": "Copiar ruta relativa y contenido"
+        "command": "extension.copyOrAnalyzeContent",
+        "title": "Copiar Contenido (o Analizar con IA)..."
       },
       {
         "command": "extension.copyDirectoryTree",
@@ -25,13 +36,13 @@
     "menus": {
       "explorer/context": [
         {
-          "command": "extension.copyPathAndContent",
+          "command": "extension.copyOrAnalyzeContent",
           "when": "resourceLangId != ''",
           "group": "navigation@5"
         },
         {
           "command": "extension.copyDirectoryTree",
-          "when": "explorerResourceIsFolder", 
+          "when": "explorerResourceIsFolder",
           "group": "navigation@6"
         }
       ]
@@ -61,6 +72,8 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "is-binary": "^0.1.0"
+    "@genkit-ai/googleai": "^1.15.2",
+    "genkit": "^1.15.2",
+    "ts-node": "^10.9.2"
   }
 }

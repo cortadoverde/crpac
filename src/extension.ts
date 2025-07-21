@@ -1,32 +1,19 @@
+// src/extension.ts
+
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { analyzeCode } from './genkit-flow';
 
-// REFACTOR: Conjunto de directorios a ignorar, para reutilizarlo en ambas funciones.
 const EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.vscode', 'out']);
-
-// Conjunto de extensiones de archivo que consideramos binarias.
 const BINARY_EXTENSIONS = new Set([
-    // Imágenes
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.bmp', '.tiff',
-    // Archivos comprimidos
-    '.zip', '.rar', '.7z', '.tar', '.gz',
-    // Documentos
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-    // Ejecutables y librerías
-    '.exe', '.dll', '.so', '.o',
-    // Media
-    '.mp3', '.mp4', '.mov', '.avi', '.wav', '.mkv',
-    // Fuentes
-    '.woff', '.woff2', '.ttf', '.otf', '.eot',
-    // Sqllite y bases de datos
-    '.sqlite', '.db', '.mdb',
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.pdf', '.doc', '.docx',
+    '.xls', '.xlsx', '.ppt', '.pptx', '.exe', '.dll', '.so', '.o',
+    '.mp3', '.mp4', '.mov', '.avi', '.wav', '.mkv', '.woff', '.woff2',
+    '.ttf', '.otf', '.eot', '.sqlite', '.db', '.mdb',
 ]);
 
-/**
- * Recorre un directorio de forma recursiva para la función 'Copiar Contenido'.
- * (Modificado para usar el conjunto EXCLUDED_DIRS)
- */
 async function getAllFileUrisInDirectory(directoryUri: vscode.Uri): Promise<vscode.Uri[]> {
     let fileUris: vscode.Uri[] = [];
     try {
@@ -35,7 +22,7 @@ async function getAllFileUrisInDirectory(directoryUri: vscode.Uri): Promise<vsco
             const fullPath = path.join(directoryUri.fsPath, entry.name);
             const entryUri = vscode.Uri.file(fullPath);
             if (entry.isDirectory()) {
-                if (EXCLUDED_DIRS.has(entry.name)) { // REFACTOR: Usa el conjunto compartido
+                if (EXCLUDED_DIRS.has(entry.name)) {
                     continue;
                 }
                 const subDirFiles = await getAllFileUrisInDirectory(entryUri);
@@ -46,23 +33,50 @@ async function getAllFileUrisInDirectory(directoryUri: vscode.Uri): Promise<vsco
         }
     } catch (error) {
         console.error(`Error al leer el directorio ${directoryUri.fsPath}:`, error);
-        vscode.window.showWarningMessage(`No se pudo acceder a algunas partes del directorio: ${error instanceof Error ? error.message : String(error)}`);
+        vscode.window.showWarningMessage(`No se pudo acceder a partes del directorio: ${error instanceof Error ? error.message : String(error)}`);
     }
     return fileUris;
 }
 
+async function getFileContent(uri: vscode.Uri, workspaceFolder: vscode.WorkspaceFolder): Promise<string> {
+    const stats = fs.statSync(uri.fsPath);
 
-// --- NUEVA FUNCIÓN ---
-/**
- * Genera una representación de árbol de un directorio de forma recursiva.
- * @param directoryPath La ruta al directorio.
- * @param prefix El prefijo para la indentación y las líneas del árbol.
- * @returns Una cadena con la estructura del árbol.
- */
+    if (stats.isFile()) {
+        const relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
+        const fileExtension = path.extname(uri.fsPath).toLowerCase();
+        if (BINARY_EXTENSIONS.has(fileExtension)) {
+            return `${relativePath}\n\`\`\`\n[Contenido de archivo binario omitido]\n\`\`\``;
+        }
+        const content = fs.readFileSync(uri.fsPath, 'utf8');
+        return `${relativePath}\n\`\`\`\n${content}\n\`\`\``;
+
+    } else if (stats.isDirectory()) {
+        const allFiles = await getAllFileUrisInDirectory(uri);
+        if (allFiles.length === 0) {
+            vscode.window.showInformationMessage('El directorio seleccionado está vacío.');
+            return '';
+        }
+        const contentParts = await Promise.all(allFiles.map(async (fileUri) => {
+            const relativePath = path.relative(workspaceFolder.uri.fsPath, fileUri.fsPath);
+            try {
+                const fileExtension = path.extname(fileUri.fsPath).toLowerCase();
+                if (BINARY_EXTENSIONS.has(fileExtension)) {
+                    return `${relativePath}\n\`\`\`\n[Contenido de archivo binario omitido]\n\`\`\``;
+                }
+                const content = await fs.promises.readFile(fileUri.fsPath, 'utf8');
+                return `${relativePath}\n\`\`\`\n${content}\n\`\`\``;
+            } catch (readError) {
+                return `${relativePath}\n\`\`\`\n[ERROR AL LEER: ${readError instanceof Error ? readError.message : 'Error desconocido'}]\n\`\`\``;
+            }
+        }));
+        return contentParts.join('\n\n---\n\n');
+    }
+    return '';
+}
+
 async function generateDirectoryTree(directoryPath: string, prefix: string = ''): Promise<string> {
     let treeString = '';
     try {
-        // Lee y filtra los directorios excluidos
         const entries = (await fs.promises.readdir(directoryPath, { withFileTypes: true }))
             .filter(entry => !EXCLUDED_DIRS.has(entry.name));
 
@@ -75,121 +89,83 @@ async function generateDirectoryTree(directoryPath: string, prefix: string = '')
             treeString += `${prefix}${connector}${entry.name}\n`;
 
             if (entry.isDirectory()) {
-                const subTree = await generateDirectoryTree(path.join(directoryPath, entry.name), childPrefix);
-                treeString += subTree;
+                treeString += await generateDirectoryTree(path.join(directoryPath, entry.name), childPrefix);
             }
         }
     } catch (error) {
         console.error(`Error al generar el árbol para ${directoryPath}:`, error);
-        // Devuelve el error como parte del árbol para que el usuario sepa que algo falló
         treeString += `${prefix}[ERROR AL LEER DIRECTORIO]\n`;
     }
-
     return treeString;
 }
 
-
 export function activate(context: vscode.ExtensionContext) {
 
-    // Comando original: Copiar Ruta y Contenido
-    const copyPathContentDisposable = vscode.commands.registerCommand('extension.copyPathAndContent', async (uri: vscode.Uri) => {
+    const copyOrAnalyzeDisposable = vscode.commands.registerCommand('extension.copyOrAnalyzeContent', async (uri: vscode.Uri) => {
         if (!uri) {
             vscode.window.showErrorMessage('No se ha seleccionado ningún archivo o directorio.');
             return;
         }
-
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
         if (!workspaceFolder) {
             vscode.window.showErrorMessage('El elemento seleccionado no está dentro del espacio de trabajo.');
             return;
         }
 
-        let finalText = '';
-
         try {
-            const stats = fs.statSync(uri.fsPath);
+            const filesContent = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Leyendo archivos...',
+            }, async () => await getFileContent(uri, workspaceFolder));
 
-            if (stats.isFile()) {
-                const relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
-                const fileExtension = path.extname(uri.fsPath).toLowerCase();
-                if (BINARY_EXTENSIONS.has(fileExtension)) {
-                    finalText = `${relativePath}\n\`\`\`\n[Contenido de archivo binario omitido]\n\`\`\``;
-                } else {
-                    const content = fs.readFileSync(uri.fsPath, 'utf8');
-                    finalText = `${relativePath}\n\`\`\`\n${content}\n\`\`\``;
-                }
+            if (!filesContent) return;
 
-            } else if (stats.isDirectory()) {
-                const allFiles = await getAllFileUrisInDirectory(uri);
-                const combinedContent: string[] = [];
-                if (allFiles.length === 0) {
-                    vscode.window.showInformationMessage('El directorio seleccionado no contiene archivos.');
-                    return;
-                }
-                for (const fileUri of allFiles) {
-                    const relativePath = path.relative(workspaceFolder.uri.fsPath, fileUri.fsPath);
-                    try {
-                        const fileExtension = path.extname(fileUri.fsPath).toLowerCase();
-                        if (BINARY_EXTENSIONS.has(fileExtension)) {
-                            combinedContent.push(`${relativePath}\n\`\`\`\n[Contenido de archivo binario omitido]\n\`\`\``);
-                        } else {
-                            const content = fs.readFileSync(fileUri.fsPath, 'utf8');
-                            combinedContent.push(`${relativePath}\n\`\`\`\n${content}\n\`\`\``);
-                        }
-                    } catch (readError) {
-                        console.error(`Error al leer el archivo ${fileUri.fsPath}:`, readError);
-                        combinedContent.push(`${relativePath} (ERROR: No se pudo leer el contenido)\n\`\`\`\n${readError instanceof Error ? readError.message : String(readError)}\n\`\`\``);
-                    }
-                }
-                finalText = combinedContent.join('\n\n---\n\n');
+            const userQuery = await vscode.window.showInputBox({
+                prompt: 'Opcional: Introduce una pregunta para analizar el contenido con IA.',
+                placeHolder: 'Ej: Resume este componente. (Deja vacío y pulsa Enter para copiar)',
+                title: 'Copiar o Analizar Contenido'
+            });
+
+            if (userQuery && userQuery.trim() !== '') {
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Analizando con IA...',
+                    cancellable: false
+                }, async () => {
+                    const aiResult = await analyzeCode({ context: filesContent, query: userQuery });
+                    await vscode.env.clipboard.writeText(aiResult);
+                    vscode.window.showInformationMessage('¡Resultado del análisis copiado al portapapeles!');
+                });
             } else {
-                vscode.window.showErrorMessage('El elemento seleccionado no es ni un archivo ni un directorio válido.');
-                return;
+                await vscode.env.clipboard.writeText(filesContent);
+                vscode.window.showInformationMessage('Contenido de archivos copiado al portapapeles.');
             }
 
-            await vscode.env.clipboard.writeText(finalText);
-            vscode.window.showInformationMessage('Ruta(s) y contenido(s) copiados al portapapeles.');
-
         } catch (error) {
-            vscode.window.showErrorMessage(`Error al procesar la selección: ${error instanceof Error ? error.message : String(error)}`);
+            vscode.window.showErrorMessage(`Error al procesar: ${error instanceof Error ? error.message : 'Error desconocido'}`);
             console.error(error);
         }
     });
 
-    // --- NUEVO COMANDO: Copiar Árbol de Directorio ---
     const copyTreeDisposable = vscode.commands.registerCommand('extension.copyDirectoryTree', async (uri: vscode.Uri) => {
-        if (!uri) {
-            vscode.window.showErrorMessage('No se ha seleccionado ningún directorio.');
+        if (!uri || !fs.statSync(uri.fsPath).isDirectory()) {
+            vscode.window.showInformationMessage('Esta acción solo se puede usar en un directorio.');
             return;
         }
 
         try {
-            const stats = fs.statSync(uri.fsPath);
-            if (!stats.isDirectory()) {
-                vscode.window.showInformationMessage('Esta acción solo se puede usar en un directorio.');
-                return;
-            }
-
-            // Genera la estructura del árbol a partir de la ruta seleccionada.
-            const treeStructure = await generateDirectoryTree(uri.fsPath);
-
-            // Obtiene el nombre del directorio raíz y lo añade al principio.
             const rootDirName = path.basename(uri.fsPath);
+            const treeStructure = await generateDirectoryTree(uri.fsPath);
             const finalText = `${rootDirName}/\n${treeStructure}`;
-
-            // Copia al portapapeles y muestra notificación.
             await vscode.env.clipboard.writeText(finalText);
             vscode.window.showInformationMessage('Árbol de directorio copiado al portapapeles.');
-
         } catch (error) {
-            vscode.window.showErrorMessage(`Error al generar el árbol del directorio: ${error instanceof Error ? error.message : String(error)}`);
+            vscode.window.showErrorMessage(`Error al generar el árbol: ${error instanceof Error ? error.message : 'Error desconocido'}`);
             console.error(error);
         }
     });
 
-
-    // Añade ambos comandos a las suscripciones para que se activen y desactiven correctamente.
-    context.subscriptions.push(copyPathContentDisposable, copyTreeDisposable);
+    context.subscriptions.push(copyOrAnalyzeDisposable, copyTreeDisposable);
 }
 
 export function deactivate() {}
