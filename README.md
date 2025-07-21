@@ -23,26 +23,28 @@ sub-directorios que haya.
 
 concatenando los archivos  con un separador ---
 
+```
 project/
 └── ejemplo/
     ├── archivo1.txt
     └── archivo2.js
+```
 
-devolveria
+### devolveria
 
 ```markdown
 
-project\ejemplo\archivo1.txt
-```
-Archivo txt
-```
+    project\ejemplo\archivo1.txt
+    ```
+    Archivo txt
+    ```
 
----
+    ---
 
-project\ejemplo\archivo2.js
-```
-// archivo js
-```
+    project\ejemplo\archivo2.js
+    ```
+    // archivo js
+    ```
 ```
 
 ## Instalación
